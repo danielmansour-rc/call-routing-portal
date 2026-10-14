@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call Routing Portal</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --text:#1b2330; --muted:#6a7485; --line:#e2e5ea;
+    --accent:#2f6fed; --tx:#2f6fed; --cx:#f08a24; --ok:#1f9d55; --err:#d93025; --warn:#fff4e5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#14171c; --card:#1d2128; --text:#e8ebf0; --muted:#98a1b0; --line:#2c323c; --warn:#3a2d17; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:20px 24px 0;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+  h1{font-size:20px;margin:0}
+  .sub{color:var(--muted);font-size:13px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  nav{display:flex;gap:6px;padding:16px 24px 0;flex-wrap:wrap}
+  nav button{border-radius:8px 8px 0 0;border-bottom:none;padding:8px 18px;font-weight:600;position:relative}
+  nav button.active{background:var(--card);color:var(--accent);border-color:var(--line)}
+  nav button .dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--cx)}
+  main{margin:0 24px 24px;background:var(--card);border:1px solid var(--line);border-radius:0 12px 12px 12px;padding:8px 20px 16px}
+  .legend{display:flex;gap:16px;padding:12px 0;color:var(--muted);font-size:13px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
+  .row{display:grid;grid-template-columns:120px 1fr 240px;gap:20px;align-items:center;padding:14px 0;border-top:1px solid var(--line)}
+  .type{font-weight:700;font-size:15px}
+  .type small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+  .bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--line);margin-bottom:8px}
+  .bar .t{background:var(--tx)} .bar .c{background:var(--cx)}
+  input[type=range]{width:100%;margin:0;accent-color:var(--accent)}
+  .nums{display:flex;gap:10px}
+  .num{flex:1}
+  .num label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .num label span{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+  .num .in{display:flex;align-items:center;gap:4px}
+  input[type=text]{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text);text-align:right}
+  input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  input.bad{border-color:var(--err);outline-color:var(--err)}
+  .msg{grid-column:2 / 4;font-size:12px;color:var(--err);min-height:0;margin-top:-6px}
+  .lock{font-size:12px;color:var(--muted);background:var(--warn);padding:2px 8px;border-radius:10px;margin-left:6px;white-space:nowrap}
+  .key{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted)}
+  .total{font-size:12px;color:var(--ok);font-weight:600;margin-top:2px;text-align:right}
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 18px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+  #toast.show{opacity:1}
+  @media(max-width:760px){.row{grid-template-columns:1fr}.msg{grid-column:1}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Call Routing Portal</h1>
+    <div class="sub">Share of calls handled per language / type / partner. Each language + type always totals 100%.</div>
+  </div>
+  <div class="actions">
+    <button id="reset">Reset to 50/50</button>
+    <button id="export">Export CSV</button>
+    <button id="discard" disabled>Discard changes</button>
+    <button id="save" class="primary" disabled>Save</button>
+  </div>
+</header>
+<nav id="tabs"></nav>
+<main>
+  <div class="legend">
+    <span><i style="background:var(--tx)"></i>Transcom</span>
+    <span><i style="background:var(--cx)"></i>Concentrix</span>
+    <span>Concentrix does not handle B2B or L&amp;F → Transcom fixed at 100%.</span>
+  </div>
+  <div id="rows"></div>
+</main>
+<div id="toast"></div>
+
+<script>
+const LANGS = ['EN','FR','IT','CA','ES'];
+const TYPES = ['PWD','B2C','B2B','PREMIUM','L&F','VY_CLUB','VY_VISA','PAE'];
+const NO_CONCENTRIX = new Set(['B2B','L&F']);
+
+// state[lang][type] = Transcom % (Concentrix = 100 - Transcom)
+const defaults = () => Object.fromEntries(LANGS.map(l => [l,
+  Object.fromEntries(TYPES.map(t => [t, NO_CONCENTRIX.has(t) ? 100 : 50]))]));
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const API = '/api/routing';
+// API shape: { EN: { B2C: { TRANSCOM: 60, CONCENTRIX: 40 } } }  <->  state shape: Transcom % only
+function fromApi(s){
+  const d = defaults();
+  for(const l of LANGS) for(const t of TYPES){
+    const v = s?.[l]?.[t]?.TRANSCOM;
+    if(Number.isInteger(v) && v>=0 && v<=100) d[l][t] = NO_CONCENTRIX.has(t) ? 100 : v;
+  }
+  return d;
+}
+function toApi(d){
+  return Object.fromEntries(LANGS.map(l => [l, Object.fromEntries(TYPES.map(t => [t,
+    { TRANSCOM: d[l][t], CONCENTRIX: 100 - d[l][t] }]))]));
+}
+let saved = defaults();
+let draft = clone(saved);
+let lang = LANGS[0];
+const errors = {}; // "lang|type" -> message
+
+const $ = s => document.querySelector(s);
+const key = (l,t) => `${l}_${t}`.replace('&','');
+const isDirtyLang = l => TYPES.some(t => draft[l][t] !== saved[l][t]);
+const isDirty = () => LANGS.some(isDirtyLang);
+
+function renderTabs(){
+  $('#tabs').innerHTML = LANGS.map(l =>
+    `<button class="${l===lang?'active':''}" data-l="${l}">${l}${isDirtyLang(l)?'<span class="dot"></span>':''}</button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => { lang = b.dataset.l; render(); });
+}
+
+function renderRows(){
+  $('#rows').innerHTML = TYPES.map(t => {
+    const locked = NO_CONCENTRIX.has(t);
+    const tx = draft[lang][t], cx = 100 - tx;
+    const k = `${lang}|${t}`;
+    return `<div class="row" data-t="${t}">
+      <div class="type">${t.replace('&','&amp;')}${locked?'<span class="lock">Transcom only</span>':''}
+        <small class="key">${key(lang,t)}_TRANSCOM / _CONCENTRIX</small></div>
+      <div>
+        <div class="bar"><div class="t" style="width:${tx}%"></div><div class="c" style="width:${cx}%"></div></div>
+        <input type="range" min="0" max="100" step="1" value="${tx}" ${locked?'disabled':''} aria-label="${t} split">
+      </div>
+      <div>
+        <div class="nums">
+          <div class="num"><label><span style="background:var(--tx)"></span>Transcom %</label>
+            <div class="in"><input type="text" inputmode="numeric" data-p="t" value="${tx}" ${locked?'disabled':''}></div></div>
+          <div class="num"><label><span style="background:var(--cx)"></span>Concentrix %</label>
+            <div class="in"><input type="text" inputmode="numeric" data-p="c" value="${cx}" ${locked?'disabled':''}></div></div>
+        </div>
+        <div class="total">Total 100%</div>
+      </div>
+      <div class="msg" ${errors[k]?'':'hidden'}>${errors[k]||''}</div>
+    </div>`;
+  }).join('');
+
+  document.querySelectorAll('.row').forEach(row => {
+    const t = row.dataset.t, k = `${lang}|${t}`;
+    const range = row.querySelector('input[type=range]');
+    const [ti, ci] = ['t','c'].map(p => row.querySelector(`[data-p=${p}]`));
+
+    const sync = v => {            // v = Transcom %
+      draft[lang][t] = v;
+      range.value = v; ti.value = v; ci.value = 100 - v;
+      row.querySelector('.t').style.width = v + '%';
+      row.querySelector('.c').style.width = (100 - v) + '%';
+      ti.classList.remove('bad'); ci.classList.remove('bad');
+      delete errors[k]; const m = row.querySelector('.msg'); m.hidden = true;
+      renderTabs(); updateButtons();
+    };
+    range.oninput = () => sync(+range.value);
+
+    const typed = (inp, other) => {
+      const raw = inp.value.trim();
+      let msg = '';
+      if(raw === '') msg = 'Enter a whole number between 0 and 100.';
+      else if(!/^\d+$/.test(raw)) msg = 'Only whole numbers are allowed (no decimals or signs).';
+      else if(+raw > 100) msg = 'Value cannot exceed 100.';
+      const m = row.querySelector('.msg');
+      if(msg){
+        errors[k] = msg; inp.classList.add('bad'); m.textContent = msg; m.hidden = false;
+        updateButtons(); return;
+      }
+      const v = +raw;
+      sync(inp === ti ? v : 100 - v);   // the other partner is auto-completed to reach 100
+    };
+    ti.oninput = () => typed(ti);
+    ci.oninput = () => typed(ci);
+    // on blur, restore the last valid value if input was invalid
+    [ti, ci].forEach(i => i.onblur = () => {
+      if(errors[k]){ delete errors[k]; renderRows(); updateButtons(); }
+    });
+  });
+}
+
+function updateButtons(){
+  const hasErr = Object.keys(errors).length > 0;
+  $('#save').disabled = !isDirty() || hasErr;
+  $('#discard').disabled = !isDirty();
+}
+
+function render(){ renderTabs(); renderRows(); updateButtons(); }
+
+function toast(m){ const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1800); }
+
+$('#save').onclick = async () => {
+  // final integrity check: every language/type must total 100
+  for(const l of LANGS) for(const t of TYPES){
+    const tx = draft[l][t];
+    if(!Number.isInteger(tx) || tx<0 || tx>100 || (NO_CONCENTRIX.has(t) && tx!==100)){
+      toast(`Invalid split for ${key(l,t)}`); return;
+    }
+  }
+  try{
+    const r = await fetch(API, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(toApi(draft)) });
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.statusText);
+  }catch(e){ toast('Could not save: ' + e.message); return; }
+  saved = clone(draft); render(); toast('Saved');
+};
+$('#discard').onclick = () => { draft = clone(saved); for(const k in errors) delete errors[k]; render(); };
+$('#reset').onclick = () => {
+  if(!confirm('Reset all languages and types to the default split (50/50, Transcom 100% for B2B and L&F)?')) return;
+  draft = defaults(); for(const k in errors) delete errors[k]; render();
+};
+$('#export').onclick = () => {
+  const rows = ['combination,percentage'];
+  for(const l of LANGS) for(const t of TYPES){
+    const tx = saved[l][t];
+    rows.push(`${key(l,t)}_TRANSCOM,${tx}`);
+    if(!NO_CONCENTRIX.has(t)) rows.push(`${key(l,t)}_CONCENTRIX,${100-tx}`);
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));
+  a.download = 'call_routing_split.csv'; a.click();
+};
+window.onbeforeunload = e => isDirty() ? (e.preventDefault(), '') : undefined;
+(async () => {
+  try{
+    const r = await fetch(API);
+    if(!r.ok) throw new Error(r.statusText);
+    saved = fromApi(await r.json()); draft = clone(saved);
+  }catch(e){ toast('Could not load saved values: ' + e.message); }
+  render();
+})();
+</script>
+</body>
+</html>
